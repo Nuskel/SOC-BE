@@ -2,60 +2,114 @@ var net = require('net');
 const https = require('https');
 const fs = require('fs');
 
-const options = {
-	key: fs.readFileSync('key.pem'),
-	cert: fs.readFileSync('cert.pem')
-};
+/* Constants */
 
-const server = https.createServer(options, (req, res) => {
-  const method = req.method; // GET, ...
-  const url = req.url.substring(1); // initial '/'
+const CONFIG_FILE_NAME = "config.json";
+const SSL_KEY_FILE = "key.pem";
+const SSL_CERT_FILE = "cert.pem";
 
-  console.log("Req:", url);	
+const PORT = 9001;
 
-  const id = parseInt(url.split('?')[0], 16);
-  const call = url.split('?')[1];
-  let cmd;
-  let value;
-  let values;	
+/* Setup the environment with config and SSL-keys. */
 
-  if (call.includes("=")) {
-    cmd = parseInt(call.split('=')[0], 16);
-    value = call.split('=')[1];
-    values = [];
+function readConfig(configName) {
+	let cfgData = fs.readFileSync(configName);
+	let config = JSON.parse(cfgData);
 
-    if (value.includes(",")) {
-      values = value.split(',').map(x => parseInt(x, 16));
-    } else {
-      values = [parseInt(value, 16)];
-    }
-  } else {
-    cmd = parseInt(call, 16);
-  }
+	console.log("Read config .. done");
 
-  console.log("Id:", id, "Command:", cmd, "Values:", values);
+	return config;
+}
 
-  execute(id, cmd, values, (data) => {
-    const ack = data[4] === 41;
+function readCertificate() {
+	let options = {
+		key: fs.readFileSync(SSL_KEY_FILE),
+		cert: fs.readFileSync(SSL_CERT_FILE)
+	};
 
-    console.log("Ack > Command:", data[5], "Result:", data[6]);
+	console.log("Read certificate and key .. done");
 
-   // TODO: check that data length (data[3]) > 0)
+	return options;
+}
 
-    if (ack) {
-      res.writeHead(200);
-      res.end("$" + data[6]);	    
-    } else {
-      res.writeHead(500);
-      res.end("!" + data[6]);	    
-    }	  	  
-  });	
-});
+/* Setup and initialize the server. */
 
-server.listen(9001, 'localhost', () => {
-  console.log("Video Wall - Back End running!");
-  console.log("Listening to localhost:9001");	
-});
+function setupServer(options) {
+	const server = https.createServer(options, (req, res) => {
+		const method = req.method; // GET, ...
+		const url = req.url.substring(1); // initial '/'
+
+		console.log(req);
+		console.log(`[${ method }] ${ url }`);	
+
+		const id = parseInt(url.split('?')[0], 16);
+		const call = url.split('?')[1];
+
+		let cmd;
+		let value;
+		let values;	
+
+		console.log(` -id=${ id } -call=${ call }`);
+
+		if (call.includes("=")) {
+			cmd = parseInt(call.split('=')[0], 16);
+			value = call.split('=')[1];
+			values = [];
+
+			if (value.includes(",")) {
+				values = value.split(',').map(x => parseInt(x, 16));
+			} else {
+				values = [parseInt(value, 16)];
+			}
+
+			console.log(` -cmd=${ cmd } -values=${ values }`);
+		} else {
+			cmd = parseInt(call, 16);
+
+			console.log(` -cmd=${ cmd } --noargs`);
+		}
+
+		//console.log("Id:", id, "Command:", cmd, "Values:", values);
+		
+		execute(id, cmd, values, (data) => {
+			const ack = data[4] === 0x41;
+
+			if (!ack) {
+				console.log("[ERROR] Request returned not with ACK (errcode: " + data[4] + ")");
+
+				res.writeHead(500);
+				res.end("ERR_" + data[6]);
+			} else {
+				console.log("Ack > Command:", data[5], "Result:", data[6]);
+
+				// TODO: check that data length (data[3]) > 0)
+				
+				res.writeHead(200);
+				res.end("ACK_" + data[6]);	    
+			}
+		});	  	  
+	});
+
+	return server;
+}
+
+function startServer(server, port) {
+	server.listen(port, '0.0.0.0', () => {
+		console.log("Video Wall BE is now running on port " + port);	
+	});
+}
+
+/* Run */
+
+function start() {
+	const config = readConfig(CONFIG_FILE_NAME);
+	const options = readCertificate();
+	const server = setupServer(options);
+	
+	startServer(server, PORT);
+}
+
+start();
 
 /*
 
