@@ -14,10 +14,14 @@ const SSL_CERT_FILE = "cert.pem";
 const PORT = 9001;
 const MONITOR_PORT = 1515;
 
+const HANDLER_TYPE_MONITOR = "monitor";
+
 /* Runtime variables */
 
+let config = {};
 let devices = {};
 let commands = {};
+let handlers = {};
 
 /* Setup the environment with config and SSL-keys. */
 
@@ -35,6 +39,18 @@ function readConfig(configName) {
 	return config;
 }
 
+function validateConfig(config) {
+	if (!config) {
+		console.log("[VAl] failed - config is missing");
+
+		return false;
+	}
+
+	// TODO: Use JSON Validator ...
+
+	return true;
+}
+
 function readCertificate() {
 	let options = {
 		key: fs.readFileSync(SSL_KEY_FILE),
@@ -48,6 +64,32 @@ function readCertificate() {
 
 /* Devices and configuration. */
 
+function setupHandlers() {
+	// Handler for screen commands
+	handlers[HANDLER_TYPE_MONITOR] = async (device, command, option, args, body) => {
+		// Config should have been validated so these values must be fine
+		const monitor = device["id"];
+		const ip = device["ip"];
+		const id = command["id"];
+
+		let values = [];
+
+		if (body !== undefined) {
+			values = [];
+		}
+
+		console.log(` << ${ monitor }@${ ip }:${ MONITOR_PORT } $ ${ id }`);
+
+		const result = await fakeExecute(monitor, id, values);
+
+		console.log(` >> ${ monitor }@${ ip }:${ MONITOR_PORT } >`, result);
+
+		return result;
+	};
+
+	console.log("Set up handlers:", HANDLER_TYPE_MONITOR);
+}
+
 /* Setup and initialize the server. */
 
 function setupServer(options) {
@@ -55,23 +97,23 @@ function setupServer(options) {
 	/**
 	 *
 	 * @param req {IncomingMessage}
-	 * @returns {{ip: string, method: 'GET'|'POST', device: string, url: string, cmd: string} | null}
+	 * @returns {{ip: string, method: 'GET'|'POST', device: string, url: string, cmd: string, option?: string, args?: string} | null}
 	 */
 	function parseRequest(req) {
 		const method = req.method;
 		const url = req.url;
 
 		/* Regex-Groups:
-		 *  /{device}/{cmd}[?{option}[={args}]
+		 *  /{device}[/{cmd}][?{option}[={args}]
 		 *
-		 *  device: [\w-]+
+		 *  device: [\w-]+ | required!
 		 *  cmd: [\w]+
 		 *  option: [\w]+
 		 *  args: [\w,]+
 		 *
 		 */
-		//                  /     {device}     /   {cmd}   [ ?   {option}   [=     {args}     ]  ]
-		const URL_REGEX = /\/(?<device>[\w-]+)\/(?<cmd>\w+)(\?(?<option>\w+)(=(?<args>([\w,]+))?))?/;
+		//                  /     {device}    [ /   {cmd}   ] [ ?   {option}   [=     {args}     ]  ]
+		const URL_REGEX = /\/(?<device>[\w-]+)(\/(?<cmd>\w+))?(\?(?<option>\w+)(=(?<args>([\w,]+))?))?/;
 		const urlParsed = url.match(URL_REGEX) || { groups: {} };
 
 		return {
@@ -85,7 +127,7 @@ function setupServer(options) {
 		};
 	}
 
-	function handleRequest(body, req, res) {
+	async function handleRequest(body, req, res) {
 
 		/**
 		 * Write code as the HTTP status with a descripted error message.
@@ -100,7 +142,35 @@ function setupServer(options) {
 			res.end();
 		}
 
+		/**
+		 *
+		 * @param code
+		 * @param content
+		 * @param type {string?}
+		 */
+		function respondResult(code, content, type) {
+			console.log(`(${ req.socket.remoteAddress }) [RESULT ${ code }]`, content);
+
+			res.writeHead(code, {"Content-Type": type || "text/plain", "Access-Control-Allow-Origin": "*"});
+			res.end(content);
+		}
+
+		/**********************************
+		 *
+		 **********************************/
+
 		const request = parseRequest(req);
+
+		console.log("REQ", request);
+
+		// Ignore
+		if (request.method === "OPTIONS") {
+			// TODO: FIX
+			res.writeHead(200, "ABC", {"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "*", "Access-Control-Allow-Headers": "*"});
+			res.end();
+
+			return;
+		}
 
 		if (request.method !== "GET" && request.method !== "POST") {
 			return respondError(400, `Unsupported method: ${ request.method }`);
@@ -112,48 +182,59 @@ function setupServer(options) {
 			return respondError(405, `Unknown device: ${ request.device }`);
 		}
 
-		const command = commands[request.cmd];
+		if (request.device === "config") {
+			const toExport = config;
+
+			if (request.option !== undefined) {
+				delete toExport[commands];
+
+				for (let key of Object.keys(toExport.devices)) {
+					if (key !== request.option) {
+						delete toExport[key];
+					}
+				}
+			}
+
+			setTimeout(() => {
+				respondResult(200, JSON.stringify(toExport), "application/json");
+			}, 2000);
+
+			return;
+		}
+
+		const handler = device["type"];
+
+		if (handlers[handler] === undefined) {
+			return respondError(405, `Type "${ handler }" has no handler`);
+		}
+
+		const command = commands[handler][request.cmd];
 
 		if (!command) {
 			return respondError(405, `Unknown command: ${ request.cmd }`);
 		}
 
+		let result = {};
+
 		if (request.method === 'GET') {
-			const monitor = device["id"];
-			const name = device["name"];
-			const ip = device["ip"];
-			const cmdId = command["id"];
-
 			console.log(`(${ request.ip }) ${ request.method } ${ request.device } ${ request.cmd }`);
-			console.log(` << ${ monitor }@${ ip }:${ MONITOR_PORT } $ ${ cmdId }`);
 
-			fakeExecute(monitor, cmdId, [], (val) => {
-				console.log(` >> ${ monitor }@${ ip }:${ MONITOR_PORT } >`, val);
-			});
+			result = await handlers[handler](device, command, request.option, request.args);
 		} else if (request.method === 'POST') {
-			const monitor = device["id"];
-			const name = device["name"];
-			const ip = device["ip"];
-			const cmdId = command["id"];
 			const cmdAllowed = command["values"];
-
-			const commandArgs = body.toString();
+			const commandBody = body.toString();
 
 			// Check for undefined since index 0 would be true on !.. check
-			if (cmdAllowed.find(x => `${ x }` === commandArgs) === undefined) {
-				return respondError(405, `Unknown request body: ${ commandArgs } - must be one of [${ cmdAllowed }]`);
+			if (cmdAllowed.find(x => `${ x }` === commandBody) === undefined) {
+				return respondError(405, `Unknown request body: ${ commandBody } - must be one of [${ cmdAllowed }]`);
 			}
 
-			console.log(`(${ request.ip }) ${ request.method } ${ request.device } ${ request.cmd } ${ commandArgs }`);
-			console.log(` << ${ monitor }@${ ip }:${ MONITOR_PORT } $ ${ cmdId } ..`, commandArgs);
+			console.log(`(${ request.ip }) ${ request.method } ${ request.device } ${ request.cmd } ${ commandBody }`);
 
-			fakeExecute(monitor, cmdId, [], (val) => {
-				console.log(` >> ${ monitor }@${ ip }:${ MONITOR_PORT } >`, val);
-
-				res.writeHead(200);
-				res.end("Result");
-			});
+			result = await handlers[handler](device, command, request.option, request.args);
 		}
+
+		return respondResult(200, result);
 	}
 
 	return https.createServer(options, (req, res) => {
@@ -163,61 +244,7 @@ function setupServer(options) {
 		req.on('data', chunk => chunks.push(chunk));
 
 		// When body was sent fully and request is done handle the request as its whole
-		req.on('end', () => handleRequest(chunks, req, res));
-
-		/*
-
-		console.log(req);
-		console.log(`[${ method }] ${ url }`);	
-
-		const id = parseInt(url.split('?')[0], 16);
-		const call = url.split('?')[1];
-
-		let cmd;
-		let value;
-		let values;	
-
-		console.log(` -id=${ id } -call=${ call }`);
-
-		if (call.includes("=")) {
-			cmd = parseInt(call.split('=')[0], 16);
-			value = call.split('=')[1];
-			values = [];
-
-			if (value.includes(",")) {
-				values = value.split(',').map(x => parseInt(x, 16));
-			} else {
-				values = [parseInt(value, 16)];
-			}
-
-			console.log(` -cmd=${ cmd } -values=${ values }`);
-		} else {
-			cmd = parseInt(call, 16);
-
-			console.log(` -cmd=${ cmd } --noargs`);
-		}
-
-		//console.log("Id:", id, "Command:", cmd, "Values:", values);
-		
-		execute(id, cmd, values, (data) => {
-			const ack = data[4] === 0x41;
-
-			if (!ack) {
-				console.log("[ERROR] Request returned not with ACK (errcode: " + data[4] + ")");
-
-				res.writeHead(500);
-				res.end("ERR_" + data[6]);
-			} else {
-				console.log("Ack > Command:", data[5], "Result:", data[6]);
-
-				// TODO: check that data length (data[3]) > 0)
-				
-				res.writeHead(200);
-				res.end("ACK_" + data[6]);	    
-			}
-		});
-
-		 */
+		req.on('end', () => handleRequest(chunks, req, res).catch(x => console.log("Caught exception while handling request:\n", x)));
 	});
 }
 
@@ -230,11 +257,17 @@ function startServer(server, port) {
 /* Run */
 
 function start() {
-	const config = readConfig(CONFIG_FILE_NAME);
-	const options = readCertificate();
-	const server = setupServer(options);
-	
-	startServer(server, PORT);
+	config = readConfig(CONFIG_FILE_NAME);
+
+	if (validateConfig(config)) {
+		const options = readCertificate();
+		const server = setupServer(options);
+
+		setupHandlers();
+		startServer(server, PORT);
+	} else {
+		console.log("[ERROR] Failed to validate config! See log above.");
+	}
 }
 
 start();
@@ -279,7 +312,14 @@ function checksum(id, command, values) {
   return checksum;
 }
 
-function fakeExecute(id, command, values, res) {
+/**
+ *
+ * @param id
+ * @param command
+ * @param values
+ * @returns {Promise<string>}
+ */
+function fakeExecute(id, command, values) {
 	const c = checksum(id, command, values);
 	const len = values ? values.length : 0;
 	const host = '192.168.35.16' + id;
@@ -295,7 +335,11 @@ function fakeExecute(id, command, values, res) {
 	console.log(`   Checksum:`, c);
 	console.log(`   Payload:`, payload);
 
-	res("Result");
+	return new Promise((resolve, reject) => {
+		setTimeout(() => {
+			resolve("Result");
+		}, 2000);
+	});
 }
 
 function execute(id, command, values, res) {
