@@ -1,6 +1,9 @@
-var net = require('net');
+const net = require('net');
 const https = require('https');
 const fs = require('fs');
+
+// Disable Logging:
+//  console.log = (x) => {};
 
 /* Constants */
 
@@ -9,14 +12,25 @@ const SSL_KEY_FILE = "key.pem";
 const SSL_CERT_FILE = "cert.pem";
 
 const PORT = 9001;
+const MONITOR_PORT = 1515;
+
+/* Runtime variables */
+
+let devices = {};
+let commands = {};
 
 /* Setup the environment with config and SSL-keys. */
 
 function readConfig(configName) {
-	let cfgData = fs.readFileSync(configName);
+	let cfgData = fs.readFileSync(configName).toString("UTF-8");
 	let config = JSON.parse(cfgData);
 
+	devices = config["devices"];
+	commands = config["commands"];
+
 	console.log("Read config .. done");
+	console.log("Registered devices:", devices);
+	console.log("Registered commands:", commands);
 
 	return config;
 }
@@ -32,12 +46,126 @@ function readCertificate() {
 	return options;
 }
 
+/* Devices and configuration. */
+
 /* Setup and initialize the server. */
 
 function setupServer(options) {
-	const server = https.createServer(options, (req, res) => {
-		const method = req.method; // GET, ...
-		const url = req.url.substring(1); // initial '/'
+
+	/**
+	 *
+	 * @param req {IncomingMessage}
+	 * @returns {{ip: string, method: 'GET'|'POST', device: string, url: string, cmd: string} | null}
+	 */
+	function parseRequest(req) {
+		const method = req.method;
+		const url = req.url;
+
+		/* Regex-Groups:
+		 *  /{device}/{cmd}[?{option}[={args}]
+		 *
+		 *  device: [\w-]+
+		 *  cmd: [\w]+
+		 *  option: [\w]+
+		 *  args: [\w,]+
+		 *
+		 */
+		//                  /     {device}     /   {cmd}   [ ?   {option}   [=     {args}     ]  ]
+		const URL_REGEX = /\/(?<device>[\w-]+)\/(?<cmd>\w+)(\?(?<option>\w+)(=(?<args>([\w,]+))?))?/;
+		const urlParsed = url.match(URL_REGEX) || { groups: {} };
+
+		return {
+			ip: req.socket.remoteAddress,
+			url,
+			method,
+			device: urlParsed.groups.device,
+			cmd: urlParsed.groups.cmd,
+			option: urlParsed.groups.option,
+			args: urlParsed.groups.args
+		};
+	}
+
+	function handleRequest(body, req, res) {
+
+		/**
+		 * Write code as the HTTP status with a descripted error message.
+		 *
+		 * @param code {number} Http status code
+		 * @param descritpion {string} Http error description
+		 */
+		function respondError(code, descritpion) {
+			console.log(`(${ req.socket.remoteAddress }) [ERROR ${ code }] ${ descritpion }`);
+
+			res.writeHead(code, descritpion);
+			res.end();
+		}
+
+		const request = parseRequest(req);
+
+		if (request.method !== "GET" && request.method !== "POST") {
+			return respondError(400, `Unsupported method: ${ request.method }`);
+		}
+
+		const device = devices[request.device];
+
+		if (!device) {
+			return respondError(405, `Unknown device: ${ request.device }`);
+		}
+
+		const command = commands[request.cmd];
+
+		if (!command) {
+			return respondError(405, `Unknown command: ${ request.cmd }`);
+		}
+
+		if (request.method === 'GET') {
+			const monitor = device["id"];
+			const name = device["name"];
+			const ip = device["ip"];
+			const cmdId = command["id"];
+
+			console.log(`(${ request.ip }) ${ request.method } ${ request.device } ${ request.cmd }`);
+			console.log(` << ${ monitor }@${ ip }:${ MONITOR_PORT } $ ${ cmdId }`);
+
+			fakeExecute(monitor, cmdId, [], (val) => {
+				console.log(` >> ${ monitor }@${ ip }:${ MONITOR_PORT } >`, val);
+			});
+		} else if (request.method === 'POST') {
+			const monitor = device["id"];
+			const name = device["name"];
+			const ip = device["ip"];
+			const cmdId = command["id"];
+			const cmdAllowed = command["values"];
+
+			const commandArgs = body.toString();
+
+			// Check for undefined since index 0 would be true on !.. check
+			if (cmdAllowed.find(x => `${ x }` === commandArgs) === undefined) {
+				return respondError(405, `Unknown request body: ${ commandArgs } - must be one of [${ cmdAllowed }]`);
+			}
+
+			console.log(`(${ request.ip }) ${ request.method } ${ request.device } ${ request.cmd } ${ commandArgs }`);
+			console.log(` << ${ monitor }@${ ip }:${ MONITOR_PORT } $ ${ cmdId } ..`, commandArgs);
+
+			fakeExecute(monitor, cmdId, [], (val) => {
+				console.log(` >> ${ monitor }@${ ip }:${ MONITOR_PORT } >`, val);
+
+				res.writeHead(200);
+				res.end("Result");
+			});
+		}
+	}
+
+	return https.createServer(options, (req, res) => {
+		let chunks = [];
+
+		// Collect all body chunks (on large data)
+		req.on('data', chunk => chunks.push(chunk));
+
+		// When body was sent fully and request is done handle the request as its whole
+		req.on('end', () => handleRequest(chunks, req, res));
+
+		/*
 
 		console.log(req);
 		console.log(`[${ method }] ${ url }`);	
@@ -87,10 +215,10 @@ function setupServer(options) {
 				res.writeHead(200);
 				res.end("ACK_" + data[6]);	    
 			}
-		});	  	  
-	});
+		});
 
-	return server;
+		 */
+	});
 }
 
 function startServer(server, port) {
@@ -149,6 +277,25 @@ function checksum(id, command, values) {
   (values || []).forEach(v => checksum += v);
 
   return checksum;
+}
+
+function fakeExecute(id, command, values, res) {
+	const c = checksum(id, command, values);
+	const len = values ? values.length : 0;
+	const host = '192.168.35.16' + id;
+	const port = 1515;
+
+	let bytes = [0xAA, command, id, len];
+	(values || []).forEach(v => bytes.push(v));
+
+	bytes.push(c);
+
+	const payload = new Uint8Array(bytes);
+
+	console.log(`   Checksum:`, c);
+	console.log(`   Payload:`, payload);
+
+	res("Result");
 }
 
 function execute(id, command, values, res) {

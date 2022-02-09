@@ -1,5 +1,52 @@
 {
-	"matrix": {
+	"devices": {
+		"soc-mon-01": {
+			"name": "Monitor 01",
+			"ip": "192.168.35.161",
+			"id": 1
+		},
+		"soc-mon-02": {
+			"name": "Monitor 02",
+			"ip": "192.168.35.162",
+			"id": 2
+		},
+		"soc-mon-03": {
+			"name": "Monitor 03",
+			"ip": "192.168.35.163",
+			"id": 3
+		},
+		"soc-mon-04": {
+			"name": "Monitor 04",
+			"ip": "192.168.35.164",
+			"id": 4
+		},
+		"soc-mon-05": {
+			"name": "Monitor 05",
+			"ip": "192.168.35.165",
+			"id": 5
+		},
+		"soc-mon-06": {
+			"name": "Monitor 06",
+			"ip": "192.168.35.166",
+			"id": 6
+		},
+		"aten-switch": {
+			"name": "HDMI Switch",
+			"ip": "192.168.35.151",
+			"matrix": [6,6]
+		}
+	},
+	"commands": {
+		"power": {
+			"id": 11,
+			"values": [0, 1],
+			"default": 0
+		},
+		"videowall": {
+			"id": 84,
+			"values": [0, 1],
+			"default": 0
+		}
 	},
 	"version": 20
 }
