@@ -1,55 +1,54 @@
+/* Telnet Module to communicate with the ATEN-Switch.
+ *
+ */
 
-var net = require('net');
-var client = new net.Socket();
+const net = require('net');
+const client = new net.Socket();
 
-client.connect(23, '192.168.35.250', function() {
-	console.log('Connected');
-	client.write('administrator\r\nSOCadmin108\r\n');
-});
+const PORT = 23;
+const IP = "192.168.35.250";
 
-client.on('data', function(data) {
-	// console.log('Received: ', data);
-	console.log(String.fromCharCode.apply(null, data));
-	//client.write('vr\n\r');
-	// client.write("SV i01 o02\r\n");
-	//client.destroy(); // kill client after server's response
+const credentials = {
+    username: "administrator",
+    password: "SOCadmin108"
+};
 
-        ex();
-});
-    
-client.on('close', function() {
-	console.log('Connection closed');
-});
+module.exports =  {
 
-// ---
+    connect: () => {
+        client.connect(PORT, IP, function() {
+            console.log('Connected');
 
-const readline = require("readline");
-const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-});
+            /* Login process:
+             *  Server is requesting the username first. When committed the password is
+             *  requested. To flush both answers (as single commits) a combination of
+             *  carriage return (\r) and the new line (\n) is used.
+             */
 
-var activeQ = false;
+            client.write(`${ credentials.username }\r\n${ credentials.password }\r\n`);
+        });
 
-function ex() {
-  if (activeQ) return;
+        client.on('data', function (data) {
+            console.log(String.fromCharCode.apply(null, data));
 
-  activeQ = true;
+            /*
+             * TODO: gibt es eine Möglichkeit zu erkennen, zu welchem Befehl die Antwort gehört?
+             */
 
-  rl.question("", function(name) {
-    activeQ = false;
+            ex();
+        });
 
-    if (name === 'close') {
-      rl.close();
-    } else {
-      client.write(name + '\r\n');
+        client.on('close', function() {
+            console.log('Connection closed');
+        });
+    },
+
+    close: () => {
+        client.destroy();
+    },
+
+    send: (call) => {
+        client.write(call + '\r\n');
     }
-  });
-}
 
-rl.on("close", function() {
-    client.destroy();
-    process.exit(0);
-});
-
-ex();
+};

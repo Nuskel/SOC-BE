@@ -1,69 +1,127 @@
 {
+	"config": {
+
+	},
 	"devices": {
-		"config":  {
-			"type": "config",
-			"name": "Konfiguration"
+		"soc-pc01": {
+			"type": "client",
+			"name": "SOC-PC 01",
+			"index": 1
 		},
+		"soc-pc02": {
+			"type": "client",
+			"name": "SOC-PC 02",
+			"index": 2
+		},
+		"soc-pc03": {
+			"type": "client",
+			"name": "SOC-PC 03",
+			"index": 3
+		},
+		"soc-pc04": {
+			"type": "client",
+			"name": "SOC-PC 04",
+			"index": 4
+		},
+		"soc-pc05": {
+			"type": "client",
+			"name": "SOC-PC 05",
+			"index": 5
+		},
+		"soc-pc06": {
+			"type": "client",
+			"name": "SOC-PC 06",
+			"index": 6
+		},
+
 		"soc-mon01": {
 			"type": "monitor",
 			"name": "Monitor 01",
 			"ip": "192.168.35.161",
-			"id": 1
+			"id": 1,
+			"index": 1
 		},
 		"soc-mon02": {
 			"type": "monitor",
 			"name": "Monitor 02",
 			"ip": "192.168.35.162",
-			"id": 2
+			"id": 2,
+			"index": 2,
+			"source": ""
 		},
 		"soc-mon03": {
 			"type": "monitor",
 			"name": "Monitor 03",
 			"ip": "192.168.35.163",
-			"id": 3
+			"id": 3,
+			"index": 3
 		},
 		"soc-mon04": {
 			"type": "monitor",
 			"name": "Monitor 04",
 			"ip": "192.168.35.164",
-			"id": 4
+			"id": 4,
+			"index": 4
 		},
 		"soc-mon05": {
 			"type": "monitor",
 			"name": "Monitor 05",
 			"ip": "192.168.35.165",
-			"id": 5
+			"id": 5,
+			"index": 5
 		},
 		"soc-mon06": {
 			"type": "monitor",
 			"name": "Monitor 06",
 			"ip": "192.168.35.166",
-			"id": 6
+			"id": 6,
+			"index": 6
 		},
+
 		"aten-switch": {
 			"type": "switch",
 			"name": "HDMI Switch",
 			"ip": "192.168.35.151",
-			"matrix": [6, 6]
+			"matrix": [1, 2, 3, 4, 5, 6, 7, 8]
 		}
 	},
 	"commands": {
 		"monitor": {
 			"power": {
-				"id": 11,
+				"id": "0x11",
 				"values": [0, 1],
 				"default": 0
 			},
 			"videowall": {
-				"id": 84,
+				"id": "0x84",
 				"values": [0, 1],
 				"default": 0
+			},
+			"source": {
+				"id": "0x14",
+				"default": "hdmi_1"
 			}
 		},
 		"switch": {
+			"state": {
+				"id": "state"
+			},
 			"matrix": {
+				"id": "matrix",
 				"default": "1,2,3,4,5,6"
+			},
+			"bind": {
+				"id": "bind"
 			}
+		}
+	},
+	"sources": {
+		"_meta_": {
+			"usage": "source;mapping"
+		},
+		"hdmi1": {
+			"name": "HDMI 1",
+			"id": ""
 		}
 	},
 	"version": 20
