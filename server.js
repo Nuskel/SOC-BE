@@ -47,39 +47,39 @@ let handlers = {};
 const sources = {
 	"dvi": {
 		name: "DVI",
-		id: 0x18,
+		id: '0x18',
 	},
 	"input_source": {
 		name: "Input Source",
-		id: 0x0C
+		id: '0x0C'
 	},
 	"magic_info": {
 		name: "Magic Info",
-		id: 0x20
+		id: '0x20'
 	},
 	"dvi_video": {
 		name: "DVI Video",
-		id: 0x1F
+		id: '0x1F'
 	},
 	"hdmi1": {
 		name: "HDMI 1",
-		id: 0x21
+		id: '0x21'
 	},
 	"hdmi1_pc": {
 		name: "HDMI 1 PC",
-		id: 0x22
+		id: '0x22'
 	},
 	"hdmi2": {
 		name: "HDMI 2",
-		id: 0x23
+		id: '0x23'
 	},
 	"hdmi2_pc": {
 		name: "HDMI 2 PC",
-		id: 0x24
+		id: '0x24'
 	},
 	"display_port": {
 		name: "Display Port",
-		id: 0x25
+		id: '0x25'
 	}
 };
 
@@ -92,6 +92,16 @@ function findDevice(type, attribute, value) {
 	}
 
 	return null;
+}
+
+function findByAttribute(object, attribute, check) {
+	for (const d of Object.entries(object)) {
+		if (check(d[1][attribute])) {
+			return d;
+		}
+	}
+
+	return null
 }
 
 /* Setup the environment with config and SSL-keys. */
@@ -246,13 +256,15 @@ function setupScopes() {
 				 */
 
 				const power = await handlers[handler](device, commands[handler]["power"], request.option, request.args);
-				const source = "hdmi2";
+				const source = await handlers[handler](device, commands[handler]["source"], request.option, request.args);
 				const videowall = await handlers[handler](device, commands[handler]["videowall"], request.option, request.args);
+
+				const src = findByAttribute(sources, 'id', (id) => parseInt(id, 16) == source) || [source];
 
 				return JSON.stringify(
 					{
 						power,
-						source,
+						source: src[0],
 						videowall
 					}
 				);
@@ -270,6 +282,10 @@ function setupScopes() {
 				console.log(`(${ request.ip }) ${ request.method } ${ request.device } ${ request.cmd }`);
 
 				result = await handlers[handler](device, command, request.option, request.args);
+
+				if (request.cmd === "source") {
+					result = (findByAttribute(sources, 'id', (id) => parseInt(id, 16) === result) || [result])[0];
+				}
 			} else if (request.method === 'POST') {
 				const cmdAllowed = command["values"];
 				const commandBody = body.toString();
@@ -285,18 +301,19 @@ function setupScopes() {
 					const source = sources[commandBody];
 
 					if (!source) {
-						throw new Error(400, `Unknown source '${ source }' - must be one of ${ sources }`);
+						throw new Error(400, `Unknown source '${ source }' - must be one of ${ Object.keys(sources) }`);
 					}
 
-					result = commandBody;
-					//result = await handlers[handler](device, command, request.option, request.args, source);
-				} else
+					result = await handlers[handler](device, command, request.option, request.args, source.id);
+					result = (findByAttribute(sources, 'id', (id) => parseInt(id, 16) === result) || [result])[0];
+				} else {
 
 				// TODO: remove
-				if (request.cmd === "power" || request.cmd === "videowall") {
-					result = commandBody;
-				} else {
+				//if (request.cmd === "power" || request.cmd === "videowall") {
+				//	result = commandBody;
+				//} else {
 					result = await handlers[handler](device, command, request.option, request.args, commandBody);
+				//}
 				}
 			}
 
@@ -316,16 +333,22 @@ function setupHandlers() {
 		let values = [];
 
 		if (body !== undefined) {
-			values = [];
+			values = [parseInt(body, 16)];
 		}
 
 		console.log(` << ${ monitor }@${ ip }:${ MONITOR_PORT } $ ${ id }`);
 
-		const result = await fakeExecute(ip, monitor, id, values);
+		const result = await execute(ip, monitor, id, values);
+		
+		if (!result) {
+			throw new Error(408 /* Request Timeout */, "Received no response from the device - timeout");
+		}
 
-		console.log(` >> ${ monitor }@${ ip }:${ MONITOR_PORT } >`, result);
+		const ack = result[4] == 41;
 
-		return result;
+		console.log(` >> ${ monitor }@${ ip }:${ MONITOR_PORT } >`, result, 'ACK:', ack, 'Response:', result[6]);
+
+		return result[6];
 	};
 
 	handlers["switch"] = async (device, command, option, args, body) => {
@@ -457,7 +480,7 @@ function setupServer(options) {
 			console.log(`(${ req.socket.remoteAddress }) [RESULT ${ code }]`, content);
 
 			res.writeHead(code, {"Content-Type": type || "text/plain", "Access-Control-Allow-Origin": "*"});
-			res.end(content);
+			res.end(`${ content }`);
 		}
 
 		/**********************************
@@ -506,7 +529,7 @@ function setupServer(options) {
 			}
 
 			res.writeHead(x.status || 500);
-			res.end(x.cause);
+			res.end(`${ x.cause }`);
 		}));
 	});
 }
@@ -599,17 +622,25 @@ function execute(ip, id, command, values, res) {
   bytes.push(c);
 
   const payload = new Uint8Array(bytes);
-
   const client = new net.Socket();
-  client.connect(1515, ip, () => {
-    console.log("Connected to Screen " + id);
-    console.log("<", payload);
-    client.write(payload);
-  });	
 
-  client.on('data', function (data) {
-    console.log(">", data);
-    res(data);
-    client.destroy();
-  });	  
+	return new Promise((res, rej) => {
+		const timeout = setTimeout(() => {
+			client.destroy();
+			res(null);
+		}, 5000);
+
+		client.connect(1515, ip, () => {
+			console.log("Connected to Screen " + id);
+			console.log("<", payload);
+			client.write(payload);
+		});	
+
+		client.on('data', function (data) {
+			console.log(">", data);
+			res(data);
+			client.destroy();
+			clearTimeout(timeout);
+		});
+	});
 }

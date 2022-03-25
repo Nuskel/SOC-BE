@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "@superhero/telnet": "^1.3.3",
+    "telnet-client": "^2.0.2"
+  }
+}
