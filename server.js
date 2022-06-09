@@ -2,16 +2,16 @@ const net = require('net');
 const https = require('https');
 const fs = require('fs');
 
-const telnet = require('./telnet-client');
+const telnet = require('/home/dummy/SOC-BE/telnet-client');
 
 // Disable Logging:
 //  console.log = (x) => {};
 
 /* Constants */
 
-const CONFIG_FILE_NAME = "config.json";
-const SSL_KEY_FILE = "key.pem";
-const SSL_CERT_FILE = "cert.pem";
+const CONFIG_FILE_NAME = "/home/dummy/SOC-BE/config.json";
+const SSL_KEY_FILE = "/home/dummy/SOC-BE/key.pem";
+const SSL_CERT_FILE = "/home/dummy/SOC-BE/cert.pem";
 
 const PORT = 9001;
 const MONITOR_PORT = 1515;
