@@ -2,7 +2,7 @@ const net = require('net');
 const https = require('https');
 const fs = require('fs');
 
-const telnet = require('./telnet');
+const telnet = require('./telnet-client');
 
 // Disable Logging:
 //  console.log = (x) => {};
@@ -261,10 +261,17 @@ function setupScopes() {
 
 				const src = findByAttribute(sources, 'id', (id) => parseInt(id, 16) == source) || [source];
 
+				// Switch state
+				const pcIn = await telnet.readOut(device.index);
+				const client = findDevice("client", "index", pcIn);
+
+				const clientId = client ? client[0] : null;
+
 				return JSON.stringify(
 					{
 						power,
 						source: src[0],
+						desktop: clientId,
 						videowall
 					}
 				);
@@ -355,11 +362,14 @@ function setupHandlers() {
 		const cmd = command["id"];
 
 		if (cmd === "state") {
-			const mockState = [1, 2, 3, 4, 5, 6]; // TODO: telnet.send("matrix").get() ???
+			const extState = await telnet.getState();
+			//const mockState = [1, 2, 3, 4, 5, 6]; // TODO: telnet.send("matrix").get() ???
 			let state = [];
 
-			for (let target = 0, source = 1; target < mockState.length; target++) {
-				source = mockState[target];
+			console.log("[Switch] State:", extState);
+
+			for (let target = 0, source = 1; target < extState.length; target++) {
+				source = extState[target];
 
 				const _src = findDevice("client", "index", source);
 				const _target = findDevice("monitor", "index", target + 1);
