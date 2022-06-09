@@ -408,6 +408,10 @@ function setupHandlers() {
 
 			// telnet.send("IO 1 2"); ??
 			// Vllt ist es nicht möglich ein Feedback zu erhalten -> muss dann eben vorsichtig behandelt werden
+
+			const res = await telnet.set(source.index, target.index);
+
+			return res;
 		}
 
 		return "1";
