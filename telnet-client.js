@@ -5,37 +5,70 @@
 const net = require('net');
 const client = new net.Socket();
 
+/********************************
+ * Constants
+ ********************************/
+
 const PORT = 23;
 const IP = "192.168.35.250";
 
 const TERMINATOR = '> ';
+const COMMAND_TIME_BUFFER = 500;
 
 const credentials = {
     username: "administrator",
     password: "SOCadmin108"
 };
 
-const queue = [];
-var response = [];
-var active = false;
-var current = null;
-var initial = false;
+/********************************
+ * State
+ ********************************/
 
+const queue = []; // command queue ({command, callback}[])
+let response = []; // response to be constructed
+let current = null; // current active command
+let initial = false; // true, if the connection is fully established
+
+/**
+ * Sends a specific format including the username and password
+ * prompted by the server on connection. The server will not
+ * answer with the default terminator after the username thus
+ * both values are sent as a single command.
+ */
 function authenticate() {
+	/* On connection server asks as following:
+	 *  username: {username}
+	 *  password: {password}
+	 * with {...} followed by \r\n each as user input.
+	 */
 	client.write(`${credentials.username}\r\n${credentials.password}\r\n`);
 }
 
+/********************************
+ * Command Handling
+ ********************************/
+
+/**
+ * Enqueues a new command to be sent when the queue is empty.
+ *
+ * @param command Command string with args
+ * @param handler Callback function
+ */
 function enqueue(command, handler) {
 	queue.push({
 		command,
 		call: handler
 	});
-	
+
+	// When the queue is empty, directly perform request
 	if (!current && initial) {
 		doNext();
 	}
 }
 
+/**
+ * Performs a request by sending the next command in queue.
+ */
 function doNext() {
 	const cmd = queue.shift();
 			
@@ -47,8 +80,14 @@ function doNext() {
 	}
 }
 
-var logged = [];
-
+/**
+ * Transforms the fully received answer from the server by cutting
+ * off the echo and terminator part. Might be modified for for
+ * different implementations.
+ *
+ * @param data Full server response
+ * @returns {*} Just the relevant user data
+ */
 function postprocess(data) {
 	/* data consists of:
 	 *    0: command echo
@@ -58,13 +97,21 @@ function postprocess(data) {
 	return data.slice(1, -1);
 }
 
-function log(data) {
-	console.log('@', data);
-	logged = [];
-}
+/********************************
+ * User functions (spec. for KVM-Switch)
+ ********************************/
 
-// -- User Functions
-
+/**
+ * Reads the state of the connection matrix.
+ * The state is represented by an array of input-output-connections:
+ *
+ *  [i(n): o(n)...]
+ *
+ *  i - index of array value ~ input index
+ *  o - array value at index ~ output index
+ *
+ * @returns {Promise<[]>}
+ */
 function readState() {
 	return new Promise((r, o) => {
 		enqueue("read", data => {
@@ -102,6 +149,14 @@ function readState() {
 	});
 }
 
+/**
+ * Returns the output index of given input index.
+ *  -1) when no port is connected to the ouput
+ *  nn) index number of connected input
+ *
+ * @param input Input index
+ * @returns {Promise<number>} Output index
+ */
 function readOut(input) {
 	return new Promise((r, o) => {
 		input = String(input).padStart(2, '0');
@@ -112,7 +167,7 @@ function readOut(input) {
 			if (data[0].startsWith(none)) {
 				r(-1);
 			} else {
-				const regex = /Input Port ([0-9]{2}) is connected to Output Port ([0-9]{2}) /;
+				const regex = /Input Port (\d{2}) is connected to Output Port (\d{2}) /;
 				const match = data[0].match(regex);
 			
 				r(+match[1]);
@@ -121,6 +176,14 @@ function readOut(input) {
 	});
 }
 
+/**
+ * Returns the input index of given output index.
+ *  -1) when no port is connected to the input
+ *  nn) index number of connected output
+ *
+ * @param output Output index
+ * @returns {Promise<number>} Input index
+ */
 function readIn(output) {
 	return new Promise((r, o) => {
 		output = String(output).padStart(2, '0');
@@ -131,10 +194,10 @@ function readIn(output) {
 			if (data[0].startsWith(none)) {
 				r(-1);
 			} else {
-				const regex = /Output Port ([0-9]{2}) is connected to Input Port ([0-9]{2}) /;
+				const regex = /Output Port (\d{2}) is connected to Input Port (\d{2}) /;
 				const match = data[0].match(regex);
 				
-				if (match && matcg.length == 2) {
+				if (match && match.length === 2) {
 					r(+match[1]);					
 				} else {
 					console.log("[Telnet] Read input: ", match);
@@ -146,6 +209,13 @@ function readIn(output) {
 	});
 }
 
+/**
+ * Connects any input to any output index.
+ *
+ * @param input Input index
+ * @param output Output index
+ * @returns {Promise<boolean>} Result success (true - success, false - any error)
+ */
 function set(input, output) {
 	return new Promise((r, o) => {
 		input = String(input).padStart(2, '0');
@@ -166,40 +236,39 @@ function set(input, output) {
 	});
 }
 
-/************************************
- *             Exports
- ************************************/
+/********************************
+ * Main Handler
+ ********************************/
 
-exports.readState = readState;
-exports.readOut = readOut;
-exports.readIn = readIn;
-exports.set = set;
+function connect() {
+	client.connect(PORT, IP, async function() {
+		console.log('[Telnet] Connected');
 
-
-// --
-
-client.connect(PORT, IP, async function() {
-	console.log('[Telnet] Connected');
-	
-	authenticate();
-});
+		authenticate();
+	});
+}
 
 client.on('data', function (data) {
 	setTimeout(() => {
 		const msg = String.fromCharCode.apply(null, data);
 		const res = msg.split("\r\n");
 		
-		// Messages may be split in serveral responses
+		/* The whole response might be split off in shorter pieces. */
 		if (current) {
 			response = [...response, ...res];
 		}
 		
-		// When the server requests for input with terminator:
-		// 46 == . 
-		if (res.slice(-1) != TERMINATOR) {
+		/* When the server requests for input with terminator:
+		 * 46 == "> "
+		 *
+		 * The last part of each server response must be the terminator.
+		 * When not given, we only got a part of the whole response.
+		 */
+		if (res.slice(-1)[0] !== TERMINATOR) {
 			return;
 		}
-		
+
+		// Trigger the first command after connection
 		if (!initial) {
 			initial = true;
 			
@@ -212,7 +281,7 @@ client.on('data', function (data) {
 			try {
 				current.call(postprocess(response));
 			} catch (e) {
-				console.error(`[Telnet] Command ${current.command} failed du to:`);
+				console.error(`[Telnet] Command '${current.command}' failed due to:`);
 				console.error(e);
 			}
 			
@@ -221,9 +290,19 @@ client.on('data', function (data) {
 			
 			doNext();
 		}
-	}, 500);
+	}, COMMAND_TIME_BUFFER);
 });
 
 client.on('close', function() {
-	console.log('Connection closed');
+	console.log('[Telnet] Connection closed');
 });
+
+/************************************
+ * Module Exports
+ ************************************/
+
+exports.connect = connect;
+exports.readState = readState;
+exports.readOut = readOut;
+exports.readIn = readIn;
+exports.set = set;

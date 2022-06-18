@@ -2,19 +2,22 @@ const net = require('net');
 const https = require('https');
 const fs = require('fs');
 
-const telnet = require('/home/dummy/SOC-BE/telnet-client');
+const HOME = "/home/dummy/SOC-BE/";
+const telnet = require(HOME + 'telnet-client');
 
 // Disable Logging:
 //  console.log = (x) => {};
 
 /* Constants */
 
-const CONFIG_FILE_NAME = "/home/dummy/SOC-BE/config.json";
-const SSL_KEY_FILE = "/home/dummy/SOC-BE/key.pem";
-const SSL_CERT_FILE = "/home/dummy/SOC-BE/cert.pem";
+const CONFIG_FILE_NAME 	= HOME + "config.json";
+const SSL_KEY_FILE 		= HOME + "key.pem";
+const SSL_CERT_FILE 	= HOME + "cert.pem";
 
 const PORT = 9001;
 const MONITOR_PORT = 1515;
+
+// config internal mapping
 
 const SCOPE_CONFIG = "config";
 const SCOPE_DEVICES = "devices";
@@ -85,6 +88,14 @@ const sources = {
 
 /* UTIL */
 
+/**
+ * Returns the device for name configured by the config.
+ *
+ * @param type Device type
+ * @param attribute Device attribute
+ * @param value Match expression
+ * @returns {null|[string, unknown]} null or [device name, {object}]
+ */
 function findDevice(type, attribute, value) {
 	for (const d of Object.entries(devices)) {
 		if (d[1].type === type && d[1][attribute] === value)
@@ -94,6 +105,15 @@ function findDevice(type, attribute, value) {
 	return null;
 }
 
+/**
+ * Returns, if existing, the value of an attribute of an object
+ * when the given predicate (check) is successfull.
+ *
+ * @param object Object
+ * @param attribute Attribute name
+ * @param check Predicate applied on the found attribute
+ * @returns {null|[string, unknown]} null or [atribute name, {object}]
+ */
 function findByAttribute(object, attribute, check) {
 	for (const d of Object.entries(object)) {
 		if (check(d[1][attribute])) {
@@ -101,7 +121,7 @@ function findByAttribute(object, attribute, check) {
 		}
 	}
 
-	return null
+	return null;
 }
 
 /* Setup the environment with config and SSL-keys. */
@@ -131,6 +151,12 @@ function readConfig(configName) {
 	return config;
 }
 
+/**
+ * Checks the integrity of the configuration file.
+ *
+ * @param config
+ * @returns {boolean}
+ */
 function validateConfig(config) {
 	let validated = true;
 
@@ -155,6 +181,7 @@ function validateConfig(config) {
 	const _devices = Object.entries(devices);
 
 	for (const d of _devices) {
+		// mandatory fields
 		if (d[1].type === "monitor" || d[1].type === "client") {
 			assert(d[1].index !== undefined, "Missing 'index' attribute in device '" + d[0] + "'");
 		}
@@ -252,6 +279,7 @@ function setupScopes() {
 				/* Currently supported:
 				 *  - power
 				 *  - source
+				 *  - switch connection
 				 *  - videowall state
 				 */
 
@@ -314,13 +342,7 @@ function setupScopes() {
 					result = await handlers[handler](device, command, request.option, request.args, source.id);
 					result = (findByAttribute(sources, 'id', (id) => parseInt(id, 16) === result) || [result])[0];
 				} else {
-
-				// TODO: remove
-				//if (request.cmd === "power" || request.cmd === "videowall") {
-				//	result = commandBody;
-				//} else {
 					result = await handlers[handler](device, command, request.option, request.args, commandBody);
-				//}
 				}
 			}
 
@@ -362,12 +384,14 @@ function setupHandlers() {
 		const cmd = command["id"];
 
 		if (cmd === "state") {
-			const extState = await telnet.getState();
-			//const mockState = [1, 2, 3, 4, 5, 6]; // TODO: telnet.send("matrix").get() ???
+			// return switch state
+
+			const extState = await telnet.getState(); // switch connection matrix
 			let state = [];
 
 			console.log("[Switch] State:", extState);
 
+			// transform indices to names
 			for (let target = 0, source = 1; target < extState.length; target++) {
 				source = extState[target];
 
@@ -379,6 +403,8 @@ function setupHandlers() {
 
 			return JSON.stringify(state);
 		} else if (cmd === "bind") {
+			// bind an input desktop to output monitor
+
 			const pair = body.split(",");
 
 			if (!pair || pair.length !== 2) {
@@ -404,17 +430,17 @@ function setupHandlers() {
 				throw new Error(500, `Invalid server configuration: missing 'index' attribute on source`);
 			}
 
-			console.log(` [Switch] Bound ${ source.index }->${ target.index }`);
+			console.log(` [Switch] Bind ${ source.index }->${ target.index }`);
 
-			// telnet.send("IO 1 2"); ??
-			// Vllt ist es nicht möglich ein Feedback zu erhalten -> muss dann eben vorsichtig behandelt werden
-
+			// request switch via telnet
 			const res = await telnet.set(source.index, target.index);
+
+			console.log(` [Switch] Binding ${ res ? 'succeeded' : 'failed' }`)
 
 			return res;
 		}
 
-		return "1";
+		return "1"; // per default send "1" as response
 	};
 
 	console.log("Set up handlers:", TYPE_MONITOR);
@@ -563,7 +589,7 @@ function start() {
 		const options = readCertificate();
 		const server = setupServer(options);
 
-		// telnet.connect();
+		telnet.connect();
 
 		setupScopes();
 		setupHandlers();
