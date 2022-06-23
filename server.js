@@ -230,7 +230,7 @@ function setupScopes() {
 
 			return new Promise((r, o) => {
 				setTimeout(() => {
-					console.log("Resp", toExport);
+					console.log("Config", toExport);
 
 					r(JSON.stringify(toExport));
 				}, 2000);
@@ -373,7 +373,7 @@ function setupHandlers() {
 			throw new Error(408 /* Request Timeout */, "Received no response from the device - timeout");
 		}
 
-		const ack = result[4] == 41;
+		const ack = result[4] == 41; // compare with ==
 
 		console.log(` >> ${ monitor }@${ ip }:${ MONITOR_PORT } >`, result, 'ACK:', ack, 'Response:', result[6]);
 
@@ -436,6 +436,10 @@ function setupHandlers() {
 			const res = await telnet.set(source.index, target.index);
 
 			console.log(` [Switch] Binding ${ res ? 'succeeded' : 'failed' }`)
+
+			if (!res) {
+				throw new Error(500, "Telnet server could not switch the binding.");
+			}
 
 			return res;
 		}
@@ -582,14 +586,20 @@ function startServer(server, port) {
 
 /* Run */
 
-function start() {
+async function start() {
 	config = readConfig(CONFIG_FILE_NAME);
 
 	if (validateConfig(config)) {
 		const options = readCertificate();
 		const server = setupServer(options);
 
-		telnet.connect();
+		let setupTelnet = await telnet.connect();
+
+		if (!setupTelnet) {
+			console.error("Failed startup: Telnet-Client did not start.");
+
+			return;
+		}
 
 		setupScopes();
 		setupHandlers();
@@ -599,7 +609,7 @@ function start() {
 	}
 }
 
-start();
+start().then(() => void 0);
 
 // -------
 
@@ -622,27 +632,6 @@ function checksum(id, command, values) {
   return sum;
 }
 
-function fakeExecute(ip, id, command, values) {
-	const c = checksum(id, command, values);
-	const len = values ? values.length : 0;
-
-	let bytes = [0xAA, command, id, len];
-	(values || []).forEach(v => bytes.push(v));
-
-	bytes.push(c);
-
-	const payload = new Uint8Array(bytes);
-
-	console.log(`   Checksum:`, c);
-	console.log(`   Payload:`, payload);
-
-	return new Promise((resolve, reject) => {
-		setTimeout(() => {
-			resolve("Result@" + id);
-		}, 2000);
-	});
-}
-
 /**
  * Sends a command to the monitor.
  *
@@ -653,34 +642,43 @@ function fakeExecute(ip, id, command, values) {
  * @param res {Promise<any>} Formatted result yielded by the monitor
  */
 function execute(ip, id, command, values, res) {
-  const c = checksum(id, command, values);
-  const len = values ? values.length : 0;
+	const c = checksum(id, command, values);
+	const len = values ? values.length : 0;
 
-  let bytes = [0xAA, command, id, len];
-  (values || []).forEach(v => bytes.push(v));
+	let bytes = [0xAA, command, id, len];
+	(values || []).forEach(v => bytes.push(v));
 
-  bytes.push(c);
+	bytes.push(c);
 
-  const payload = new Uint8Array(bytes);
-  const client = new net.Socket();
+	const payload = new Uint8Array(bytes);
+	const client = new net.Socket();
 
-	return new Promise((res, rej) => {
+	return new Promise((response, rej) => {
 		const timeout = setTimeout(() => {
+			console.error(`Error on connection: ${ ip }/${ id }/${ command } || TIMEOUT`);
+
 			client.destroy();
-			res(null);
+			response(null);
 		}, 5000);
 
 		client.connect(1515, ip, () => {
 			console.log("Connected to Screen " + id);
 			console.log("<", payload);
 			client.write(payload);
-		});	
+		});
 
 		client.on('data', function (data) {
 			console.log(">", data);
-			res(data);
+			response(data);
 			client.destroy();
 			clearTimeout(timeout);
+		});
+
+		client.on('error', (ex) => {
+			console.error(`Error on connection: ${ ip }/${ id }/${ command }`);
+			console.error(ex);
+
+			response(null);
 		});
 	});
 }

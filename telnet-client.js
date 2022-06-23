@@ -14,6 +14,7 @@ const IP = "192.168.35.250";
 
 const TERMINATOR = '> ';
 const COMMAND_TIME_BUFFER = 500;
+const COMMAND_TIMEOUT = 5000;
 
 const credentials = {
     username: "administrator",
@@ -53,15 +54,19 @@ function authenticate() {
  *
  * @param command Command string with args
  * @param handler Callback function
+ * @param err	  Error handler
  */
-function enqueue(command, handler) {
+function enqueue(command, handler, err) {
 	queue.push({
 		command,
-		call: handler
+		call: handler,
+		err
 	});
 
+	console.log("[Telnet] enqueued", command)
+
 	// When the queue is empty, directly perform request
-	if (!current && initial) {
+	if (!current/* && initial*/) {
 		doNext();
 	}
 }
@@ -73,10 +78,24 @@ function doNext() {
 	const cmd = queue.shift();
 			
 	if (cmd) {
+		const name = cmd.command;
 		current = cmd;
+
+		setTimeout(() => {
+			console.error(`[Telnet] Timeout for command '${ name }' after ${ COMMAND_TIMEOUT }ms.`);
+
+			abortCommand("timeout");
+		}, COMMAND_TIMEOUT);
 		
 		console.log(`$ ${cmd.command}`);
 		client.write(cmd.command + "\r\n");
+	}
+}
+
+function abortCommand(reason) {
+	if (current) {
+		current.err(reason);
+		current = null;
 	}
 }
 
@@ -110,7 +129,7 @@ function postprocess(data) {
  *  i - index of array value ~ input index
  *  o - array value at index ~ output index
  *
- * @returns {Promise<[]>}
+ * @returns {Promise<[]>} array of connections; null on error
  */
 function readState() {
 	return new Promise((r, o) => {
@@ -125,7 +144,7 @@ function readState() {
 				console.log("[Telnet] ERR: invalid response state:");
 				console.log(` '${success}'`);
 				
-				o(false);
+				r(null);
 				
 				return;
 			}
@@ -145,7 +164,7 @@ function readState() {
 			}
 			
 			r(state);
-		});
+		}, err => r(null));
 	});
 }
 
@@ -155,7 +174,7 @@ function readState() {
  *  nn) index number of connected input
  *
  * @param input Input index
- * @returns {Promise<number>} Output index
+ * @returns {Promise<number>} Output index; -1 on error
  */
 function readOut(input) {
 	return new Promise((r, o) => {
@@ -172,7 +191,7 @@ function readOut(input) {
 			
 				r(+match[1]);
 			}
-		});
+		}, e => r(-1));
 	});
 }
 
@@ -182,7 +201,7 @@ function readOut(input) {
  *  nn) index number of connected output
  *
  * @param output Output index
- * @returns {Promise<number>} Input index
+ * @returns {Promise<number>} Input index; -1 on error
  */
 function readIn(output) {
 	return new Promise((r, o) => {
@@ -205,7 +224,7 @@ function readIn(output) {
 					r(-1);
 				}		
 			}
-		});
+		}, e => r(-1));
 	});
 }
 
@@ -214,7 +233,7 @@ function readIn(output) {
  *
  * @param input Input index
  * @param output Output index
- * @returns {Promise<boolean>} Result success (true - success, false - any error)
+ * @returns {Promise<boolean>} true on success; false on error
  */
 function set(input, output) {
 	return new Promise((r, o) => {
@@ -232,7 +251,7 @@ function set(input, output) {
 			} else {
 				r(true);
 			}
-		});
+		}, e => r(false));
 	});
 }
 
@@ -241,10 +260,21 @@ function set(input, output) {
  ********************************/
 
 function connect() {
-	client.connect(PORT, IP, async function() {
-		console.log('[Telnet] Connected');
+	return new Promise((res, rej) => {
+		client.connect(PORT, IP, async function() {
+			console.log('[Telnet] Connected');
 
-		authenticate();
+			authenticate();
+
+			res(true);
+		})
+
+		client.on('error', (ex) => {
+			console.log("[Telnet] Failed to connect to the server.");
+			console.log(ex);
+
+			res(false);
+		});
 	});
 }
 
@@ -281,7 +311,7 @@ client.on('data', function (data) {
 			try {
 				current.call(postprocess(response));
 			} catch (e) {
-				console.error(`[Telnet] Command '${current.command}' failed due to:`);
+				console.log(`[Telnet] Command '${current.command}' failed.`);
 				console.error(e);
 			}
 			
@@ -293,8 +323,19 @@ client.on('data', function (data) {
 	}, COMMAND_TIME_BUFFER);
 });
 
-client.on('close', function() {
-	console.log('[Telnet] Connection closed');
+client.on('close', function(err) {
+	if (err) {
+		console.log('[Telnet] Connection closed due to an error.');
+	} else {
+		console.log('[Telnet] Connection closed');
+	}
+});
+
+client.on('error', (ex) => {
+	console.log("[Telnet] Error on telnet connection.");
+	console.error(ex);
+
+	abortCommand(ex);
 });
 
 /************************************
