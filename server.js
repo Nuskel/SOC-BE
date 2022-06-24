@@ -21,6 +21,7 @@ const MONITOR_PORT = 1515;
 
 const SCOPE_CONFIG = "config";
 const SCOPE_DEVICES = "devices";
+const SCOPE_VIDEOWALL = "videowall";
 
 const TYPE_MONITOR = "monitor";
 
@@ -205,21 +206,64 @@ function readCertificate() {
 
 /* Devices and configuration. */
 
-function readOptAndArg(url) {
-	const URL_REGEX = /\/(?<scope>\w+)(\?(?<option>\w+)(=(?<args>([\w,]+))?)?)?/;
+function readOptAndArg(url, setScope = undefined) {
+	let URL_REGEX;
+
+	if (!setScope) {
+		URL_REGEX = /\/(?<scope>\w+)(\?(?<option>\w+)(=(?<args>([\w,]+))?)?)?/;
+	} else {
+		URL_REGEX = /(\?(?<option>\w+)(=(?<args>([\w,]+))?)?)/;
+	}
+	
 	const urlParsed = url.match(URL_REGEX) || { groups: {} };
 
 	return {
-		scope: urlParsed.groups.scope,
+		scope: setScope || urlParsed.groups.scope,
 		option: urlParsed.groups.option,
 		args: urlParsed.groups.args
 	};
 }
 
+
+async function execDevice(device, command, option, args, body) {
+	// Config should have been validated so these values must be fine
+	const monitor = device["id"];
+	const ip = device["ip"];
+	const id = parseInt(command["id"], 16);
+
+	let values = [];
+
+	if (body !== undefined) {
+		if (!body.includes(",")) {
+			values = [parseInt(body, 16)];
+
+			console.log("single value", body, values);
+		} else {
+			values = body.split(",").map(val => parseInt(val, 16));
+
+			console.log("multiple values", body, values);
+		}
+	}
+
+	console.log(` << ${ monitor }@${ ip }:${ MONITOR_PORT } $ ${ id }`);
+
+	const result = await execute(ip, monitor, id, values);
+	
+	if (!result) {
+		throw new Error(408 /* Request Timeout */, "Received no response from the device - timeout");
+	}
+
+	const ack = result[4] == 41; // compare with ==
+
+	console.log(` >> ${ monitor }@${ ip }:${ MONITOR_PORT } >`, result, 'ACK:', ack, 'Response:', result[6]);
+
+	return result[6];
+}
+
 function setupScopes() {
 	scopes[SCOPE_CONFIG] = {
 		parseUrl: (url) => {
-			return readOptAndArg(url);
+			return readOptAndArg(url, SCOPE_CONFIG);
 		},
 		handleRequest: async (request, body) => {
 			let toExport = {};
@@ -233,8 +277,46 @@ function setupScopes() {
 					console.log("Config", toExport);
 
 					r(JSON.stringify(toExport));
-				}, 2000);
+				}, 10);
 			});
+		}
+	};
+
+	scopes[SCOPE_VIDEOWALL] = {
+		parseUrl: (url) => {
+			return readOptAndArg(url, SCOPE_VIDEOWALL);
+		},
+		handleRequest: async (request, body) => {
+			body = body.toString();
+
+			const rows = body.split(";");
+
+			for (let r = 0; r < rows.length; r++) {
+				const cols = rows[r].split(",");
+				const pattern = `${ cols.length }${ rows.length }`;
+
+				for (let c = 0; c < cols.length; c++) {
+					const index = 1 + r * cols.length + c;
+
+					console.log("binding", cols[c], "->", pattern, index);
+
+					const device = devices[cols[c]];
+
+					if (!device) {
+						throw new Error(400, `Unknown device ${ request.device }`);
+					}
+
+					if (device.type !== TYPE_MONITOR) {
+						throw new Error(400, `Invalid device type ${ device.type }. Expected: monitor`);
+					}
+
+					const cmd = commands[TYPE_MONITOR]["videowall_set"];
+
+					console.log(device, cmd);
+
+					let result = await execDevice(device, cmd, request.options, request.args, `${ pattern },${ index }`);
+				}
+			}
 		}
 	};
 
@@ -353,7 +435,7 @@ function setupScopes() {
 
 function setupHandlers() {
 	// Handler for screen commands
-	handlers[TYPE_MONITOR] = async (device, command, option, args, body) => {
+	handlers[TYPE_MONITOR] = execDevice; /*async (device, command, option, args, body) => {
 		// Config should have been validated so these values must be fine
 		const monitor = device["id"];
 		const ip = device["ip"];
@@ -370,7 +452,7 @@ function setupHandlers() {
 		const result = await execute(ip, monitor, id, values);
 		
 		if (!result) {
-			throw new Error(408 /* Request Timeout */, "Received no response from the device - timeout");
+			throw new Error(408 /* Request Timeout *//*, "Received no response from the device - timeout");
 		}
 
 		const ack = result[4] == 41; // compare with ==
@@ -378,7 +460,7 @@ function setupHandlers() {
 		console.log(` >> ${ monitor }@${ ip }:${ MONITOR_PORT } >`, result, 'ACK:', ack, 'Response:', result[6]);
 
 		return result[6];
-	};
+	};*/
 
 	handlers["switch"] = async (device, command, option, args, body) => {
 		const cmd = command["id"];
@@ -418,6 +500,32 @@ function setupHandlers() {
 				throw new Error(400, `Unknown source device '${ pair[0] }'`);
 			}
 
+			if (!target) {
+				throw new Error(400, `Unknwon target device ${ pair[1] }`);
+			}
+
+			if (source.type === "ext-client" && target.type === "monitor") {
+				const sourceCmd = commands[TYPE_MONITOR]["source"];
+
+				if (!sourceCmd) {
+					throw new Error(500, `Unsupported operation: binding external clients via source and not switch. 'source' command missing on device type '${ TYPE_MONITOR }'`);
+				}
+
+				if (!source.source) {
+					throw new Error(500, `Device is missing the 'source' field. External clients have to define them.`);
+				}
+
+				const devSource = sources[source.source];
+
+				if (!devSource) {
+					throw new Error(500, `Configuration error: source '${ source.source }' set on external client is unknown.`);
+				}
+
+				console.log(`Binding an external client via source: ${ pair[0] } -> ${ pair[1] } @ source: ${ devSource }`);
+
+				await execDevice(target, sourceCmd, option, args, devSource.id);
+			}
+
 			if (source.index === undefined) {
 				throw new Error(500, `Invalid server configuration: missing 'index' attribute on source`);
 			}
@@ -427,7 +535,7 @@ function setupHandlers() {
 			}
 
 			if (target.index === undefined) {
-				throw new Error(500, `Invalid server configuration: missing 'index' attribute on source`);
+				throw new Error(500, `Invalid server configuration: missing 'index' attribute on target`);
 			}
 
 			console.log(` [Switch] Bind ${ source.index }->${ target.index }`);
@@ -475,11 +583,13 @@ function setupServer(options) {
 		}
 
 		let parsed = readOptAndArg(url);
-		url = url.substr(parsed.scope.length + 1); // remove scope from url + tailing /
+		//url = url.substr(parsed.scope.length + 1); // remove scope from url + tailing /
 
 		if (!parsed.scope) {
 			throw new Error(400, `A scope is required: '${ BASE }/{scope}'`);
 		}
+
+		url = url.substr(parsed.scope.length + 1);
 
 		const scopeName = parsed.scope;
 		const scope = scopes[parsed.scope];

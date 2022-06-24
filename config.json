@@ -2,6 +2,9 @@
 	"config": {
 
 	},
+	"videowallcfg": {
+		
+	},
 	"devices": {
 		"soc-pc01": {
 			"type": "client",
@@ -33,13 +36,19 @@
 			"name": "SOC-PC 06",
 			"index": 6
 		},
+		"soc-ext01": {
+			"type": "ext-client",
+			"name": "SOC-EXT 01",
+			"source": "hdmi1"
+		},
 
 		"soc-mon01": {
 			"type": "monitor",
 			"name": "Monitor 01",
 			"ip": "192.168.35.161",
 			"id": 1,
-			"index": 1
+			"index": 1,
+			"main-source": "hdmi2"
 		},
 		"soc-mon02": {
 			"type": "monitor",
@@ -47,35 +56,39 @@
 			"ip": "192.168.35.162",
 			"id": 2,
 			"index": 2,
-			"source": ""
+			"main-source": "hdmi2"
 		},
 		"soc-mon03": {
 			"type": "monitor",
 			"name": "Monitor 03",
 			"ip": "192.168.35.163",
 			"id": 3,
-			"index": 3
+			"index": 3,
+			"main-source": "hdmi2"
 		},
 		"soc-mon04": {
 			"type": "monitor",
 			"name": "Monitor 04",
 			"ip": "192.168.35.164",
 			"id": 4,
-			"index": 4
+			"index": 4,
+			"main-source": "hdmi2"
 		},
 		"soc-mon05": {
 			"type": "monitor",
 			"name": "Monitor 05",
 			"ip": "192.168.35.165",
 			"id": 5,
-			"index": 5
+			"index": 5,
+			"main-source": "hdmi2"
 		},
 		"soc-mon06": {
 			"type": "monitor",
 			"name": "Monitor 06",
 			"ip": "192.168.35.166",
 			"id": 6,
-			"index": 6
+			"index": 6,
+			"main-source": "hdmi2"
 		},
 
 		"aten-switch": {
@@ -93,9 +106,15 @@
 				"default": 0
 			},
 			"videowall": {
+			
+			},
+			"videowall_toggle": {
 				"id": "0x84",
 				"values": [0, 1],
 				"default": 0
+			},
+			"videowall_set": {
+				"id": "0x89"
 			},
 			"source": {
 				"id": "0x14",
