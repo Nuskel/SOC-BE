@@ -290,6 +290,7 @@ function setupScopes() {
 			body = body.toString();
 
 			const rows = body.split(";");
+			let success = true;
 
 			for (let r = 0; r < rows.length; r++) {
 				const cols = rows[r].split(",");
@@ -297,9 +298,6 @@ function setupScopes() {
 
 				for (let c = 0; c < cols.length; c++) {
 					const index = 1 + r * cols.length + c;
-
-					console.log("binding", cols[c], "->", pattern, index);
-
 					const device = devices[cols[c]];
 
 					if (!device) {
@@ -312,11 +310,15 @@ function setupScopes() {
 
 					const cmd = commands[TYPE_MONITOR]["videowall_set"];
 
-					console.log(device, cmd);
+					console.log(`Videowall ${ cols[c] } -> ${ pattern },${ index }`);
 
 					let result = await execDevice(device, cmd, request.options, request.args, `${ pattern },${ index }`);
+			
+					// TODO: success = success && ...
 				}
 			}
+
+			return new Promise((res, rej) => res(success));
 		}
 	};
 
