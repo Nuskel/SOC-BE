@@ -82,7 +82,9 @@ function doNext() {
 		current = cmd;
 
 		setTimeout(() => {
-			console.error(`[Telnet] Timeout for command '${ name }' after ${ COMMAND_TIMEOUT }ms.`);
+			if (current) {
+				console.error(`[Telnet] Timeout for command '${ name }' after ${ COMMAND_TIMEOUT }ms.`);
+			}
 
 			abortCommand("timeout");
 		}, COMMAND_TIMEOUT);

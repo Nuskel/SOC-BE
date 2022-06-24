@@ -292,12 +292,35 @@ function setupScopes() {
 			const rows = body.split(";");
 			let success = true;
 
+			let height = 0;
+			let width = 0;
+
+			for (const row of rows) {
+				const columns = row.split(",").length;
+
+				// count only non-empty columns
+				if (columns) {
+					height++;
+				}
+
+				if (columns > width) {
+					width = columns;
+				}
+			}
+
+			const pattern = `${ width}${ height }`;
+
 			for (let r = 0; r < rows.length; r++) {
 				const cols = rows[r].split(",");
-				const pattern = `${ cols.length }${ rows.length }`;
-
+				
 				for (let c = 0; c < cols.length; c++) {
 					const index = 1 + r * cols.length + c;
+
+					// ignore empty
+					if (!cols[c]) {
+						continue;
+					}
+
 					const device = devices[cols[c]];
 
 					if (!device) {
@@ -308,11 +331,13 @@ function setupScopes() {
 						throw new Error(400, `Invalid device type ${ device.type }. Expected: monitor`);
 					}
 
+					const toggle = commands[TYPE_MONITOR]["videowall_toggle"];
 					const cmd = commands[TYPE_MONITOR]["videowall_set"];
 
 					console.log(`Videowall ${ cols[c] } -> ${ pattern },${ index }`);
 
-					let result = await execDevice(device, cmd, request.options, request.args, `${ pattern },${ index }`);
+					let mode = await execDevice(device, toggle, request.options, request.args, "1"); // toggle video wall mode on
+					let cfg = await execDevice(device, cmd, request.options, request.args, `${ pattern },${ index }`);
 			
 					// TODO: success = success && ...
 				}
@@ -369,7 +394,7 @@ function setupScopes() {
 
 				const power = await handlers[handler](device, commands[handler]["power"], request.option, request.args);
 				const source = await handlers[handler](device, commands[handler]["source"], request.option, request.args);
-				const videowall = await handlers[handler](device, commands[handler]["videowall"], request.option, request.args);
+				const videowall = await handlers[handler](device, commands[handler]["videowall_toggle"], request.option, request.args);
 
 				const src = findByAttribute(sources, 'id', (id) => parseInt(id, 16) == source) || [source];
 
@@ -506,26 +531,53 @@ function setupHandlers() {
 				throw new Error(400, `Unknwon target device ${ pair[1] }`);
 			}
 
-			if (source.type === "ext-client" && target.type === "monitor") {
+			if ((source.type === "client" || source.type === "ext-client") && target.type === "monitor") {
 				const sourceCmd = commands[TYPE_MONITOR]["source"];
 
 				if (!sourceCmd) {
-					throw new Error(500, `Unsupported operation: binding external clients via source and not switch. 'source' command missing on device type '${ TYPE_MONITOR }'`);
+					throw new Error(500, `Configuration error: 'source' command missing on device type '${ TYPE_MONITOR }'`);
 				}
 
-				if (!source.source) {
-					throw new Error(500, `Device is missing the 'source' field. External clients have to define them.`);
+				let selSource = undefined;
+
+				
+				if (source.type === "ext-client") {
+					if (!source.source) {
+						throw new Error(500, `Device is missing the 'source' field. External clients have to define them.`);
+					} else {
+						selSource = source.source;	
+					}
+				} else if (source.type === "client") {
+					// TODO use state value
+					if (!target["main-source"]) {
+						throw new Error(500, `Target device is missing the 'main-source' field.`);
+					} else {
+						selSource = target["main-source"];
+					}
 				}
 
-				const devSource = sources[source.source];
+				if (!selSource) {
+					throw new Error(500, `Could not identify source to set.}`);
+				}
+
+				const devSource = sources[selSource];
 
 				if (!devSource) {
-					throw new Error(500, `Configuration error: source '${ source.source }' set on external client is unknown.`);
+					throw new Error(500, `Configuration error: source '${ source.source }' for client is unknown.`);
 				}
 
 				console.log(`Binding an external client via source: ${ pair[0] } -> ${ pair[1] } @ source: ${ devSource }`);
 
-				await execDevice(target, sourceCmd, option, args, devSource.id);
+				const current = await execDevice(target, sourceCmd, option, args);
+
+				// only change input if current source is not the desired
+				if (parseInt(devSource.id, 16) !== current) {
+					const res = await execDevice(target, sourceCmd, option, args, devSource.id);
+				}
+
+				if (source.type === "ext-client") {
+					return true;
+				}
 			}
 
 			if (source.index === undefined) {
