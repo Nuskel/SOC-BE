@@ -1,8 +1,8 @@
 const net = require('net');
-const https = require('https');
+const https = require('http');
 const fs = require('fs');
 
-const HOME = "/home/dummy/SOC-BE/";
+const HOME = "./"; //"/home/dummy/SOC-BE/";
 const telnet = require(HOME + 'telnet-client');
 
 // Disable Logging:
@@ -24,6 +24,10 @@ const SCOPE_DEVICES = "devices";
 const SCOPE_VIDEOWALL = "videowall";
 
 const TYPE_MONITOR = "monitor";
+const TYPE_SWITCH = "switch";
+
+const TYPE_CLIENT = "client"; // connection via switch binding (providing source)
+const TYPE_EXT_CLIENT = "ext-client"; // connected via source; no switch binding
 
 /* Classes */
 
@@ -193,6 +197,11 @@ function validateConfig(config) {
 	return validated;
 }
 
+/**
+ * Reads the SSL key and certificate from file.
+ *
+ * @return {{cert: Buffer, key: Buffer}}
+ */
 function readCertificate() {
 	let options = {
 		key: fs.readFileSync(SSL_KEY_FILE),
@@ -206,6 +215,16 @@ function readCertificate() {
 
 /* Devices and configuration. */
 
+/**
+ * Reads options and args from the URL.
+ * Expects layout as following:
+ *
+ *  /scope?option=args
+ *
+ * @param url URL
+ * @param setScope When given, the scope will not be read from URL
+ * @return {{args: *, scope: *, option: *}}
+ */
 function readOptAndArg(url, setScope = undefined) {
 	let URL_REGEX;
 
@@ -224,8 +243,17 @@ function readOptAndArg(url, setScope = undefined) {
 	};
 }
 
-
-async function execDevice(device, command, option, args, body) {
+/**
+ * Execute a command on a monitor.
+ *
+ * @param device Device object
+ * @param command Command object
+ * @param option URL option
+ * @param args URL args
+ * @param body Command body
+ * @returns {Promise<*>} Result of execution
+ */
+async function execMonitor(device, command, option, args, body) {
 	// Config should have been validated so these values must be fine
 	const monitor = device["id"];
 	const ip = device["ip"];
@@ -236,12 +264,8 @@ async function execDevice(device, command, option, args, body) {
 	if (body !== undefined) {
 		if (!body.includes(",")) {
 			values = [parseInt(body, 16)];
-
-			console.log("single value", body, values);
 		} else {
 			values = body.split(",").map(val => parseInt(val, 16));
-
-			console.log("multiple values", body, values);
 		}
 	}
 
@@ -260,6 +284,135 @@ async function execDevice(device, command, option, args, body) {
 	return result[6];
 }
 
+/**
+ *
+ * @param device
+ * @param command
+ * @param option
+ * @param args
+ * @param body
+ * @return {Promise<*|string|boolean>}
+ */
+async function execSwitch(device, command, option, args, body) {
+	const cmd = command["id"];
+
+	if (cmd === "state") {
+		// return switch state
+
+		const extState = await telnet.getState(); // switch connection matrix
+		let state = [];
+
+		console.log("[Switch] State:", extState);
+
+		// transform indices to names
+		for (let target = 0, source = 1; target < extState.length; target++) {
+			source = extState[target];
+
+			const _src = findDevice("client", "index", source);
+			const _target = findDevice("monitor", "index", target + 1);
+
+			state.push([_src ? _src[0] : null, _target ? _target[0] : null]);
+		}
+
+		return JSON.stringify(state);
+	} else if (cmd === "bind") {
+		// bind an input desktop to output monitor
+
+		const pair = body.split(",");
+
+		if (!pair || pair.length !== 2) {
+			throw new Error(400, `Bind format must be '{source},{target}' using the device name`);
+		}
+
+		const source = devices[pair[0]];
+		const target = devices[pair[1]];
+
+		if (!source) {
+			throw new Error(400, `Unknown source device '${ pair[0] }'`);
+		}
+
+		if (!target) {
+			throw new Error(400, `Unknwon target device ${ pair[1] }`);
+		}
+
+		/* Handle special binding between: (client, ext-client)->monitor */
+
+		if ((source.type === TYPE_CLIENT || source.type === TYPE_EXT_CLIENT) && target.type === TYPE_MONITOR) {
+			const sourceCmd = commands[TYPE_MONITOR]["source"];
+
+			if (!sourceCmd) {
+				throw new Error(500, `Configuration error: 'source' command missing on device type '${ TYPE_MONITOR }'`);
+			}
+
+			// selected source
+			let selSource = undefined;
+
+			if (source.type === TYPE_EXT_CLIENT) {
+				if (!source.source) {
+					throw new Error(500, `Device is missing the 'source' field. External clients have to define them.`);
+				} else {
+					selSource = source.source;
+				}
+			} else if (source.type === TYPE_CLIENT) {
+				// TODO use state value
+				if (!target["main-source"]) {
+					throw new Error(500, `Target device is missing the 'main-source' field.`);
+				} else {
+					selSource = target["main-source"];
+				}
+			}
+
+			if (!selSource) {
+				throw new Error(500, `Could not identify source to set.}`);
+			}
+
+			const devSource = sources[selSource];
+
+			if (!devSource) {
+				throw new Error(500, `Configuration error: source '${ source.source }' for client is unknown.`);
+			}
+
+			console.log(`Selection source for combination: ${ pair[0] } -> ${ pair[1] } @ source: ${ devSource }`);
+
+			const current = await execMonitor(target, sourceCmd, option, args);
+
+			// only change input if current source is not the desired
+			if (parseInt(devSource.id, 16) !== current) {
+				const res = await execMonitor(target, sourceCmd, option, args, devSource.id);
+			}
+
+			if (source.type === "ext-client") {
+				return true;
+			}
+		}
+
+		/* Normal connection of input->ouput using the switch. */
+
+		if (source.index === undefined) {
+			throw new Error(500, `Invalid server configuration: missing 'index' attribute on source`);
+		}
+
+		if (target.index === undefined) {
+			throw new Error(500, `Invalid server configuration: missing 'index' attribute on target`);
+		}
+
+		console.log(` [Switch] Bind ${ source.index }->${ target.index }`);
+
+		// request switch via telnet
+		const res = await telnet.set(source.index, target.index);
+
+		console.log(` [Switch] Binding ${ res ? 'succeeded' : 'failed' }`)
+
+		if (!res) {
+			throw new Error(500, "Telnet server could not switch the binding.");
+		}
+
+		return res;
+	}
+
+	return "1"; // per default send "1" as response
+}
+
 function setupScopes() {
 	scopes[SCOPE_CONFIG] = {
 		parseUrl: (url) => {
@@ -274,14 +427,17 @@ function setupScopes() {
 
 			return new Promise((r, o) => {
 				setTimeout(() => {
-					console.log("Config", toExport);
-
 					r(JSON.stringify(toExport));
 				}, 10);
 			});
 		}
 	};
 
+	/**
+	 * Creates a videowall of given pattern including the devices.
+	 *
+	 * @type {{parseUrl: (function(*=): {args: *, scope: *, option: *}), handleRequest: (function(*, *): Promise<unknown>)}}
+	 */
 	scopes[SCOPE_VIDEOWALL] = {
 		parseUrl: (url) => {
 			return readOptAndArg(url, SCOPE_VIDEOWALL);
@@ -289,8 +445,9 @@ function setupScopes() {
 		handleRequest: async (request, body) => {
 			body = body.toString();
 
+			console.log(`Creating videowall of pattern '${ body }'`);
+
 			const rows = body.split(";");
-			let success = true;
 
 			let height = 0;
 			let width = 0;
@@ -308,7 +465,10 @@ function setupScopes() {
 				}
 			}
 
-			const pattern = `${ width}${ height }`;
+			const pattern = `${ width }${ height }`;
+			const calls = [];
+
+			console.log(`Pattern: ${ width }x${ height } -> ${ pattern }`);
 
 			for (let r = 0; r < rows.length; r++) {
 				const cols = rows[r].split(",");
@@ -336,14 +496,32 @@ function setupScopes() {
 
 					console.log(`Videowall ${ cols[c] } -> ${ pattern },${ index }`);
 
-					let mode = await execDevice(device, toggle, request.options, request.args, "1"); // toggle video wall mode on
-					let cfg = await execDevice(device, cmd, request.options, request.args, `${ pattern },${ index }`);
-			
-					// TODO: success = success && ...
+					calls.push(new Promise(async (res, rej) => {
+						// request videowall state (on | off)
+						const state = await execMonitor(device, toggle, request.options, request.args);
+
+						// only change videowall mode if not already active
+						if (state === 0) {
+							// toggle video wall mode on
+							await execMonitor(device, toggle, request.options, request.args, "1");
+						}
+
+						// set videowall section
+						//  payload layout: {pattern = 1 digit each: (width)(height)},{index in videowall}
+						//  ex: 2x2 wall => 22,1 for the first monitor
+						await execMonitor(device, cmd, request.options, request.args, `${ pattern },${ index }`);
+
+						res(true); // TODO: check if all went ok
+					}));
 				}
 			}
 
-			return new Promise((res, rej) => res(success));
+			if (calls.length === 0) {
+				return true;
+			}
+
+			// Return true only if all requests were successfull
+			return (await Promise.all(calls)).reduce((p, c) => p && c);
 		}
 	};
 
@@ -383,8 +561,11 @@ function setupScopes() {
 			}
 
 			// No commands sent: return status of monitor
-			// TODO: only on GET
 			if (!request.cmd && handler === TYPE_MONITOR) {
+				if (request.method !== 'GET') {
+					throw new Error(405, "Monitor state can only be retrieved by GET.");
+				}
+
 				/* Currently supported:
 				 *  - power
 				 *  - source
@@ -396,7 +577,7 @@ function setupScopes() {
 				const source = await handlers[handler](device, commands[handler]["source"], request.option, request.args);
 				const videowall = await handlers[handler](device, commands[handler]["videowall_toggle"], request.option, request.args);
 
-				const src = findByAttribute(sources, 'id', (id) => parseInt(id, 16) == source) || [source];
+				const src = findByAttribute(sources, 'id', (id) => parseInt(id, 16) === source) || [null];
 
 				// Switch state
 				const pcIn = await telnet.readOut(device.index);
@@ -461,153 +642,8 @@ function setupScopes() {
 }
 
 function setupHandlers() {
-	// Handler for screen commands
-	handlers[TYPE_MONITOR] = execDevice; /*async (device, command, option, args, body) => {
-		// Config should have been validated so these values must be fine
-		const monitor = device["id"];
-		const ip = device["ip"];
-		const id = parseInt(command["id"], 16);
-
-		let values = [];
-
-		if (body !== undefined) {
-			values = [parseInt(body, 16)];
-		}
-
-		console.log(` << ${ monitor }@${ ip }:${ MONITOR_PORT } $ ${ id }`);
-
-		const result = await execute(ip, monitor, id, values);
-		
-		if (!result) {
-			throw new Error(408 /* Request Timeout *//*, "Received no response from the device - timeout");
-		}
-
-		const ack = result[4] == 41; // compare with ==
-
-		console.log(` >> ${ monitor }@${ ip }:${ MONITOR_PORT } >`, result, 'ACK:', ack, 'Response:', result[6]);
-
-		return result[6];
-	};*/
-
-	handlers["switch"] = async (device, command, option, args, body) => {
-		const cmd = command["id"];
-
-		if (cmd === "state") {
-			// return switch state
-
-			const extState = await telnet.getState(); // switch connection matrix
-			let state = [];
-
-			console.log("[Switch] State:", extState);
-
-			// transform indices to names
-			for (let target = 0, source = 1; target < extState.length; target++) {
-				source = extState[target];
-
-				const _src = findDevice("client", "index", source);
-				const _target = findDevice("monitor", "index", target + 1);
-
-				state.push([_src ? _src[0] : null, _target ? _target[0] : null]);
-			}
-
-			return JSON.stringify(state);
-		} else if (cmd === "bind") {
-			// bind an input desktop to output monitor
-
-			const pair = body.split(",");
-
-			if (!pair || pair.length !== 2) {
-				throw new Error(400, `Bind format must be '{source},{target}' using the device name`);
-			}
-
-			const source = devices[pair[0]];
-			const target = devices[pair[1]];
-
-			if (!source) {
-				throw new Error(400, `Unknown source device '${ pair[0] }'`);
-			}
-
-			if (!target) {
-				throw new Error(400, `Unknwon target device ${ pair[1] }`);
-			}
-
-			if ((source.type === "client" || source.type === "ext-client") && target.type === "monitor") {
-				const sourceCmd = commands[TYPE_MONITOR]["source"];
-
-				if (!sourceCmd) {
-					throw new Error(500, `Configuration error: 'source' command missing on device type '${ TYPE_MONITOR }'`);
-				}
-
-				let selSource = undefined;
-
-				
-				if (source.type === "ext-client") {
-					if (!source.source) {
-						throw new Error(500, `Device is missing the 'source' field. External clients have to define them.`);
-					} else {
-						selSource = source.source;	
-					}
-				} else if (source.type === "client") {
-					// TODO use state value
-					if (!target["main-source"]) {
-						throw new Error(500, `Target device is missing the 'main-source' field.`);
-					} else {
-						selSource = target["main-source"];
-					}
-				}
-
-				if (!selSource) {
-					throw new Error(500, `Could not identify source to set.}`);
-				}
-
-				const devSource = sources[selSource];
-
-				if (!devSource) {
-					throw new Error(500, `Configuration error: source '${ source.source }' for client is unknown.`);
-				}
-
-				console.log(`Binding an external client via source: ${ pair[0] } -> ${ pair[1] } @ source: ${ devSource }`);
-
-				const current = await execDevice(target, sourceCmd, option, args);
-
-				// only change input if current source is not the desired
-				if (parseInt(devSource.id, 16) !== current) {
-					const res = await execDevice(target, sourceCmd, option, args, devSource.id);
-				}
-
-				if (source.type === "ext-client") {
-					return true;
-				}
-			}
-
-			if (source.index === undefined) {
-				throw new Error(500, `Invalid server configuration: missing 'index' attribute on source`);
-			}
-
-			if (!target) {
-				throw new Error(400, `Unknown target device '${ pair[1] }'`);
-			}
-
-			if (target.index === undefined) {
-				throw new Error(500, `Invalid server configuration: missing 'index' attribute on target`);
-			}
-
-			console.log(` [Switch] Bind ${ source.index }->${ target.index }`);
-
-			// request switch via telnet
-			const res = await telnet.set(source.index, target.index);
-
-			console.log(` [Switch] Binding ${ res ? 'succeeded' : 'failed' }`)
-
-			if (!res) {
-				throw new Error(500, "Telnet server could not switch the binding.");
-			}
-
-			return res;
-		}
-
-		return "1"; // per default send "1" as response
-	};
+	handlers[TYPE_MONITOR] = execMonitor;
+	handlers[TYPE_SWITCH] = execSwitch;
 
 	console.log("Set up handlers:", TYPE_MONITOR);
 }
@@ -637,7 +673,6 @@ function setupServer(options) {
 		}
 
 		let parsed = readOptAndArg(url);
-		//url = url.substr(parsed.scope.length + 1); // remove scope from url + tailing /
 
 		if (!parsed.scope) {
 			throw new Error(400, `A scope is required: '${ BASE }/{scope}'`);
@@ -691,9 +726,7 @@ function setupServer(options) {
 			res.end(`${ content }`);
 		}
 
-		/**********************************
-		 *
-		 **********************************/
+		/***********************************/
 
 		const request = parseRequest(req);
 
@@ -748,7 +781,7 @@ function startServer(server, port) {
 	});
 }
 
-/* Run */
+/* Configure and start the service application. */
 
 async function start() {
 	config = readConfig(CONFIG_FILE_NAME);
@@ -757,7 +790,7 @@ async function start() {
 		const options = readCertificate();
 		const server = setupServer(options);
 
-		let setupTelnet = await telnet.connect();
+		let setupTelnet = true; // await telnet.connect();
 
 		if (!setupTelnet) {
 			console.error("Failed startup: Telnet-Client did not start.");
@@ -803,9 +836,9 @@ function checksum(id, command, values) {
  * @param id {number} Id of the device
  * @param command {number} Command code as hex int
  * @param values {number[] | undefined} Optional command body as array of hex ints
- * @param res {Promise<any>} Formatted result yielded by the monitor
+ * @return {Buffer | null} Data buffer on success; null on error
  */
-function execute(ip, id, command, values, res) {
+function execute(ip, id, command, values) {
 	const c = checksum(id, command, values);
 	const len = values ? values.length : 0;
 
@@ -818,14 +851,14 @@ function execute(ip, id, command, values, res) {
 	const client = new net.Socket();
 
 	return new Promise((response, rej) => {
-		const timeout = setTimeout(() => {
-			console.error(`Error on connection: ${ ip }/${ id }/${ command } || TIMEOUT`);
+		/*const timeout = setTimeout(() => {
+			console.error(`Error on connection: ${ ip }:${ MONITOR_PORT}@${ id } $> ${ command } || TIMEOUT`);
 
 			client.destroy();
 			response(null);
 		}, 5000);
 
-		client.connect(1515, ip, () => {
+		client.connect(MONITOR_PORT, ip, () => {
 			console.log("Connected to Screen " + id);
 			console.log("<", payload);
 			client.write(payload);
@@ -843,6 +876,10 @@ function execute(ip, id, command, values, res) {
 			console.error(ex);
 
 			response(null);
-		});
+		});*/
+
+		setTimeout(() => {
+			response([0, 0, 0, 0, 0x41, 0, 1]);
+		}, 200);
 	});
 }
