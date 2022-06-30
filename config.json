@@ -9,32 +9,38 @@
 		"soc-pc01": {
 			"type": "client",
 			"name": "SOC-PC 01",
-			"index": 1
+			"index": 1,
+			"ip": "192.168.35.131"
 		},
 		"soc-pc02": {
 			"type": "client",
 			"name": "SOC-PC 02",
-			"index": 2
+			"index": 2,
+			"ip": "192.168.35.132"
 		},
 		"soc-pc03": {
 			"type": "client",
 			"name": "SOC-PC 03",
-			"index": 3
+			"index": 3,
+			"ip": "192.168.35.133"
 		},
 		"soc-pc04": {
 			"type": "client",
 			"name": "SOC-PC 04",
-			"index": 4
+			"index": 4,
+			"ip": "192.168.35.134"
 		},
 		"soc-pc05": {
 			"type": "client",
 			"name": "SOC-PC 05",
-			"index": 5
+			"index": 5,
+			"ip": "192.168.35.135"
 		},
 		"soc-pc06": {
 			"type": "client",
 			"name": "SOC-PC 06",
-			"index": 6
+			"index": 6,
+			"ip": "192.168.35.136"
 		},
 		"soc-ext01": {
 			"type": "ext-client",

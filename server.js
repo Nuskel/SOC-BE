@@ -1,8 +1,8 @@
 const net = require('net');
-const https = require('http');
+const https = require('https');
 const fs = require('fs');
 
-const HOME = "./"; //"/home/dummy/SOC-BE/";
+const HOME = "/home/dummy/SOC-BE/";
 const telnet = require(HOME + 'telnet-client');
 
 // Disable Logging:
@@ -372,11 +372,11 @@ async function execSwitch(device, command, option, args, body) {
 				throw new Error(500, `Configuration error: source '${ source.source }' for client is unknown.`);
 			}
 
-			console.log(`Selection source for combination: ${ pair[0] } -> ${ pair[1] } @ source: ${ devSource }`);
+			console.log(`Selection source for combination: ${ pair[0] } -> ${ pair[1] } @ source: ${ devSource.id }`);
 
 			const current = await execMonitor(target, sourceCmd, option, args);
 
-			// only change input if current source is not the desired
+			// only change input if current source is not the desired one
 			if (parseInt(devSource.id, 16) !== current) {
 				const res = await execMonitor(target, sourceCmd, option, args, devSource.id);
 			}
@@ -401,7 +401,7 @@ async function execSwitch(device, command, option, args, body) {
 		// request switch via telnet
 		const res = await telnet.set(source.index, target.index);
 
-		console.log(` [Switch] Binding ${ res ? 'succeeded' : 'failed' }`)
+		console.log(` [Switch] Binding ${ res ? 'succeeded' : 'failed' }`);
 
 		if (!res) {
 			throw new Error(500, "Telnet server could not switch the binding.");
@@ -474,7 +474,7 @@ function setupScopes() {
 				const cols = rows[r].split(",");
 				
 				for (let c = 0; c < cols.length; c++) {
-					const index = 1 + r * cols.length + c;
+					const index = 1 + r * width + c;
 
 					// ignore empty
 					if (!cols[c]) {
@@ -790,7 +790,7 @@ async function start() {
 		const options = readCertificate();
 		const server = setupServer(options);
 
-		let setupTelnet = true; // await telnet.connect();
+		let setupTelnet = await telnet.connect();
 
 		if (!setupTelnet) {
 			console.error("Failed startup: Telnet-Client did not start.");
@@ -851,7 +851,7 @@ function execute(ip, id, command, values) {
 	const client = new net.Socket();
 
 	return new Promise((response, rej) => {
-		/*const timeout = setTimeout(() => {
+		const timeout = setTimeout(() => {
 			console.error(`Error on connection: ${ ip }:${ MONITOR_PORT}@${ id } $> ${ command } || TIMEOUT`);
 
 			client.destroy();
@@ -876,10 +876,6 @@ function execute(ip, id, command, values) {
 			console.error(ex);
 
 			response(null);
-		});*/
-
-		setTimeout(() => {
-			response([0, 0, 0, 0, 0x41, 0, 1]);
-		}, 200);
+		});
 	});
 }
