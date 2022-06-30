@@ -68,7 +68,7 @@
 			"type": "monitor",
 			"name": "Monitor 03",
 			"ip": "192.168.35.163",
-			"id": 3,
+			"id": 1,
 			"index": 3,
 			"main-source": "hdmi2"
 		},
@@ -76,7 +76,7 @@
 			"type": "monitor",
 			"name": "Monitor 04",
 			"ip": "192.168.35.164",
-			"id": 4,
+			"id": 1,
 			"index": 4,
 			"main-source": "hdmi2"
 		},
